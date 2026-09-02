@@ -82,7 +82,7 @@ export const generateDesign = createServerFn({ method: "POST" })
   .validator((input: GenerateInput) => input)
   .handler(async ({ data }): Promise<GenerateResult | GenerateError> => {
     const apiKey = process.env.XAI_API_KEY;
-    const model = data.model || "grok-4.5";
+    const model = data.model || "grok-4.6";
     const local = fallbackDesign({
       prompt: data.prompt,
       kind: data.kind,

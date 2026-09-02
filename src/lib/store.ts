@@ -87,7 +87,7 @@ function emptyProject(input: CreateInput, defaultSystemId: string | null): Proje
       : [],
     systemId: input.systemId ?? defaultSystemId,
     share: "private",
-    model: "grok-4.5",
+    model: "grok-4.6",
     createdAt: now,
     updatedAt: now,
   };
