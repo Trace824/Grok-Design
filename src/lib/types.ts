@@ -5,7 +5,7 @@ export type ShareAccess = "private" | "view" | "comment" | "edit";
 export type HomeTab = "designs" | "examples" | "systems";
 export type DesignsFilter = "recent" | "yours";
 export type TweakType = "color" | "range" | "select" | "toggle";
-export type ModelId = "grok-4.5" | "grok-4" | "grok-3";
+export type ModelId = "grok-4.6" | "grok-4.5" | "grok-4" | "grok-3";
 
 export type Tweak = {
   id: string;

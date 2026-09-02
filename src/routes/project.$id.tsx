@@ -58,6 +58,7 @@ export const Route = createFileRoute("/project/$id")({
 });
 
 const MODELS: { id: ModelId; label: string }[] = [
+  { id: "grok-4.6", label: "Grok 4.6" },
   { id: "grok-4.5", label: "Grok 4.5" },
   { id: "grok-4", label: "Grok 4" },
   { id: "grok-3", label: "Grok 3" },

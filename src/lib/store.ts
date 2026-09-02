@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { uid } from "./id";
+import { persistProjectSnapshot } from "./projects";
 import { grokDefaultSystem } from "./systems";
 import type {
   Attachment,
@@ -87,10 +88,16 @@ function emptyProject(input: CreateInput, defaultSystemId: string | null): Proje
       : [],
     systemId: input.systemId ?? defaultSystemId,
     share: "private",
-    model: "grok-4.5",
+    model: "grok-4.6",
     createdAt: now,
     updatedAt: now,
   };
+}
+
+
+function persistAfter(get: () => DesignState, id: string) {
+  const project = get().projects.find((p) => p.id === id);
+  if (project) persistProjectSnapshot(project);
 }
 
 export const useDesignStore = create<DesignState>()(
@@ -116,14 +123,17 @@ export const useDesignStore = create<DesignState>()(
         const def = get().systems.find((s) => s.isDefault) ?? get().systems[0];
         const project = emptyProject(input, def?.id ?? null);
         set((s) => ({ projects: [project, ...s.projects] }));
+        persistProjectSnapshot(project);
         return project;
       },
-      updateProject: (id, patch) =>
+      updateProject: (id, patch) => {
         set((s) => ({
           projects: s.projects.map((p) =>
             p.id === id ? { ...p, ...patch, updatedAt: Date.now() } : p,
           ),
-        })),
+        }));
+        persistAfter(get, id);
+      },
       renameProject: (id, name) => get().updateProject(id, { name }),
       deleteProject: (id) =>
         set((s) => ({ projects: s.projects.filter((p) => p.id !== id) })),
@@ -142,7 +152,7 @@ export const useDesignStore = create<DesignState>()(
         return copy;
       },
       getProject: (id) => get().projects.find((p) => p.id === id),
-      setHtml: (id, html, saveVersion) =>
+      setHtml: (id, html, saveVersion) => {
         set((s) => ({
           projects: s.projects.map((p) => {
             if (p.id !== id) return p;
@@ -163,9 +173,11 @@ export const useDesignStore = create<DesignState>()(
               : p.versions;
             return { ...p, html, files, versions, updatedAt: Date.now() };
           }),
-        })),
+        }));
+        persistAfter(get, id);
+      },
       setTweaks: (id, tweaks) => get().updateProject(id, { tweaks }),
-      setTweakValue: (id, tweakId, value) =>
+      setTweakValue: (id, tweakId, value) => {
         set((s) => ({
           projects: s.projects.map((p) =>
             p.id === id
@@ -178,7 +190,9 @@ export const useDesignStore = create<DesignState>()(
                 }
               : p,
           ),
-        })),
+        }));
+        persistAfter(get, id);
+      },
       addMessage: (id, message) =>
         set((s) => ({
           projects: s.projects.map((p) =>
