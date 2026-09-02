@@ -146,7 +146,8 @@ export default defineConfig(({ command }) => ({
     ...(command === "build"
       ? [
           nitro({
-            preset: "vercel",
+            // Fly Dockerfile sets NITRO_PRESET=node-server; use vercel for Vercel.
+            preset: process.env.NITRO_PRESET || "node-server",
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
