@@ -5,6 +5,7 @@ import { SignedIn, SignedOut, UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { authEnabled, signIn, GROK_PROVIDERS } from "@/lib/auth/client";
 import { Wordmark } from "@/components/logo";
+import { XaiConnectCard } from "@/components/xai-connect-card";
 import { EXAMPLES } from "@/lib/examples";
 import { useDesignStore } from "@/lib/store";
 import { tutorialHtml } from "@/lib/templates";
@@ -227,6 +228,10 @@ function Home() {
               Set up design system
             </button>
           </div>
+
+          <SignedIn>
+            <XaiConnectCard />
+          </SignedIn>
         </div>
 
         <div className="mt-auto flex items-center gap-2 px-6 py-5 text-[13px] text-mute">
