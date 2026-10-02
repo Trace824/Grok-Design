@@ -44,3 +44,29 @@ export const authMiddleware = createMiddleware({ type: "function" })
     const userId = await requireUserId(context.bearerToken);
     return next({ context: { userId } });
   });
+
+/**
+ * Like `authMiddleware`, but never throws: `context.userId` is the verified
+ * user id, or `null` when signed out / auth disabled / the request is a
+ * scripted cross-site call. Used by generation endpoints that must keep working
+ * anonymously (server key / local templates) but should use the caller's own
+ * xAI credential when they are signed in. A cross-site request never resolves a
+ * user, so a sibling site can't spend someone's xAI quota (CSRF).
+ */
+export const optionalAuthMiddleware = createMiddleware({ type: "function" })
+  .client(async ({ next }) => {
+    const { getBearerToken } = await import("./client");
+    return next({ sendContext: { bearerToken: getBearerToken() ?? undefined } });
+  })
+  .server(async ({ next, context }) => {
+    const { assertSameSiteRequest } = await import("./isolation.server");
+    const { getSessionUser } = await import("./verify.server");
+    let userId: string | null = null;
+    try {
+      assertSameSiteRequest();
+      userId = (await getSessionUser(context.bearerToken))?.id ?? null;
+    } catch {
+      userId = null;
+    }
+    return next({ context: { userId } });
+  });

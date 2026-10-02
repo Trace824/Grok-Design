@@ -3,18 +3,19 @@
  * Never import this module from client components or browser bundles.
  */
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import {
-  accessSync,
-  constants,
-  existsSync,
-  mkdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { accessSync, constants, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  createRunHome,
+  killGroup,
+  redactSecrets,
+  seedExternalAuth,
+  type RunCredential,
+  type RunHome,
+} from "./grok-run/run-home.ts";
 import type { Tweak } from "./types";
+
+export type { RunCredential };
 
 const COMMON_GROK_PATHS = [
   "/home/box/.local/bin/grok",
@@ -87,6 +88,11 @@ export type RunGrokBuildDesignOpts = {
   currentHtml?: string;
   maxTurns?: number;
   timeoutMs?: number;
+  /**
+   * Exactly one credential per run: the user's short-lived xAI access token
+   * (served through the CLI's external-auth hook) or the server API key.
+   */
+  credential: RunCredential;
 };
 
 export type RunGrokBuildDesignResult = GrokBuildDesignOutput & {
@@ -135,11 +141,44 @@ export function allowApiFallback(): boolean {
   return (process.env.GROK_BUILD_ALLOW_API_FALLBACK || "").toLowerCase() === "true";
 }
 
-/** True when Build should be the primary generation path. */
+/**
+ * True when Build should be the primary generation path (enabled + binary
+ * present). Credential availability is decided by the caller
+ * (`resolveGenerationCredential`).
+ */
 export function shouldUseGrokBuild(): boolean {
   if (isGrokBuildDisabled()) return false;
-  if (!process.env.XAI_API_KEY?.trim()) return false;
   return resolveGrokBin() !== null;
+}
+
+/** Default run timeouts — the user token handed to a run must outlive them. */
+export const DESIGN_RUN_TIMEOUT_MS = 180_000;
+export const EXTRACT_RUN_TIMEOUT_MS = 90_000;
+
+/** Classified Grok Build failure; `message` is safe to show (redacted, no raw stderr dump). */
+export class GrokBuildError extends Error {
+  readonly code: "auth_rejected" | "forbidden" | "timeout" | "no_output" | "failed" | "auth_seed_failed";
+  readonly httpStatus?: number;
+  constructor(code: GrokBuildError["code"], message: string, httpStatus?: number) {
+    super(message);
+    this.name = "GrokBuildError";
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+}
+
+function classifyFailure(detail: string): GrokBuildError {
+  const safe = redactSecrets(detail).slice(0, 300);
+  const status = detail.match(/"?http_status"?\s*:\s*(\d{3})/)?.[1] ?? detail.match(/\b(401|403)\b/)?.[1];
+  if (status === "401") return new GrokBuildError("auth_rejected", `Grok Build failed: xAI rejected the credential (401). ${safe}`, 401);
+  if (status === "403") {
+    return new GrokBuildError(
+      "forbidden",
+      `Grok Build failed: xAI refused this account (403) — your plan may not include Grok Build access. ${safe}`,
+      403,
+    );
+  }
+  return new GrokBuildError("failed", `Grok Build failed: ${safe}`);
 }
 
 function buildAgentsMd(systemPrompt: string): string {
@@ -217,6 +256,8 @@ function spawnGrok(
       cwd: opts.cwd,
       env: opts.env,
       stdio: ["ignore", "pipe", "pipe"],
+      // Own process group so a timeout kills grok AND anything it spawned.
+      detached: true,
     });
 
     let stdout = "";
@@ -226,15 +267,8 @@ function spawnGrok(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore
-        }
-      }, 2000);
-      reject(new Error(`Grok Build timed out after ${Math.round(opts.timeoutMs / 1000)}s`));
+      killGroup(child.pid);
+      reject(new GrokBuildError("timeout", `Grok Build timed out after ${Math.round(opts.timeoutMs / 1000)}s`));
     }, opts.timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer | string) => {
@@ -312,12 +346,21 @@ function parseGrokJsonStdout(stdout: string): {
   };
 }
 
-function createRunWorkdir(): string {
-  const parent = join(tmpdir(), "grok-design-runs");
-  mkdirSync(parent, { recursive: true });
-  const workdir = join(parent, randomUUID());
-  mkdirSync(workdir, { recursive: true });
-  return workdir;
+/**
+ * Fresh private run dir (HOME, GROK_HOME, cwd) + allowlisted env for ONE run;
+ * for user-OAuth runs, seeds the CLI's external-auth credential first.
+ */
+async function prepareRun(bin: string, credential: RunCredential): Promise<RunHome> {
+  const run = createRunHome(credential);
+  if (credential.kind === "user_oauth") {
+    try {
+      await seedExternalAuth(bin, run);
+    } catch {
+      run.cleanup();
+      throw new GrokBuildError("auth_seed_failed", "Grok Build could not load your xAI sign-in for this run.");
+    }
+  }
+  return run;
 }
 
 /**
@@ -331,15 +374,11 @@ export async function runGrokBuildDesign(
   if (!bin) {
     throw new Error("Grok Build CLI binary not found. Install grok or set GROK_BUILD_BIN.");
   }
-  const apiKey = process.env.XAI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error("XAI_API_KEY is required for Grok Build.");
-  }
-
   const model = opts.model?.trim() || undefined;
   const maxTurns = opts.maxTurns ?? 6;
-  const timeoutMs = opts.timeoutMs ?? 180_000;
-  const workdir = createRunWorkdir();
+  const timeoutMs = opts.timeoutMs ?? DESIGN_RUN_TIMEOUT_MS;
+  const run = await prepareRun(bin, opts.credential);
+  const workdir = run.cwd;
 
   try {
     writeFileSync(join(workdir, "AGENTS.md"), buildAgentsMd(opts.systemPrompt), "utf8");
@@ -371,19 +410,16 @@ export async function runGrokBuildDesign(
       "--max-turns",
       String(maxTurns),
       "--disallowed-tools",
-      "Agent,web_search,web_fetch",
+      // No shell: the run only needs structured output (also keeps the agent
+      // away from its own run-scoped credential files).
+      "Agent,web_search,web_fetch,run_terminal_cmd",
     ];
     if (model) {
       args.push("-m", model);
     }
 
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      XAI_API_KEY: apiKey,
-      GROK_DISABLE_AUTOUPDATER: "1",
-    };
-
-    const { stdout, stderr, code } = await spawnGrok(args, { cwd: workdir, env, timeoutMs });
+    // Explicit allowlisted env from createRunHome; the parent env is never inherited.
+    const { stdout, stderr, code } = await spawnGrok(args, { cwd: workdir, env: run.env, timeoutMs });
     const parsedOut = parseGrokJsonStdout(stdout);
 
     if (code !== 0) {
@@ -392,29 +428,26 @@ export async function runGrokBuildDesign(
         stderr.trim().slice(0, 400) ||
         stdout.trim().slice(0, 400) ||
         `exit ${code}`;
-      throw new Error(`Grok Build failed: ${detail}`);
+      throw classifyFailure(detail);
     }
 
     if (parsedOut.errorMessage && !parsedOut.structured && !parsedOut.text) {
-      throw new Error(`Grok Build failed: ${parsedOut.errorMessage}`);
+      throw classifyFailure(parsedOut.errorMessage);
     }
 
     const design = normalizeDesignOutput(parsedOut.structured ?? null, parsedOut.text || stdout);
     if (!design) {
-      throw new Error(
+      throw new GrokBuildError(
+        "no_output",
         "Grok Build returned no usable design JSON (missing html). " +
-          (stderr.trim().slice(0, 200) || "Check structured_output / model output."),
+          (redactSecrets(stderr.trim()).slice(0, 200) || "Check structured_output / model output."),
       );
     }
 
     const usedModel = model ? `grok-build/${model}` : "grok-build";
     return { ...design, usedModel, rawText: parsedOut.text || stdout };
   } finally {
-    try {
-      rmSync(workdir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup
-    }
+    run.cleanup();
   }
 }
 
@@ -475,13 +508,13 @@ export async function runGrokBuildExtractSystem(opts: {
   name: string;
   model?: string;
   timeoutMs?: number;
+  credential: RunCredential;
 }): Promise<DesignSystemExtract> {
   const bin = resolveGrokBin();
   if (!bin) throw new Error("Grok Build CLI binary not found");
-  const apiKey = process.env.XAI_API_KEY?.trim();
-  if (!apiKey) throw new Error("XAI_API_KEY is required");
 
-  const workdir = createRunWorkdir();
+  const run = await prepareRun(bin, opts.credential);
+  const workdir = run.cwd;
   const systemRules = `Extract a design system as JSON matching the schema.
 Hex colors only. No markdown. Prefer the given name when sensible: ${opts.name || "Custom system"}.`;
 
@@ -519,13 +552,13 @@ ${systemRules}
 
     const { stdout, stderr, code } = await spawnGrok(args, {
       cwd: workdir,
-      env: { ...process.env, XAI_API_KEY: apiKey, GROK_DISABLE_AUTOUPDATER: "1" },
-      timeoutMs: opts.timeoutMs ?? 90_000,
+      env: run.env,
+      timeoutMs: opts.timeoutMs ?? EXTRACT_RUN_TIMEOUT_MS,
     });
 
     const parsedOut = parseGrokJsonStdout(stdout);
     if (code !== 0) {
-      throw new Error(parsedOut.errorMessage || stderr.slice(0, 300) || `exit ${code}`);
+      throw classifyFailure(parsedOut.errorMessage || stderr.slice(0, 300) || `exit ${code}`);
     }
     const obj = parsedOut.structured || extractJsonObject(parsedOut.text || stdout);
     if (!obj) throw new Error("No design-system JSON from Grok Build");
@@ -540,10 +573,6 @@ ${systemRules}
       components: typeof obj.components === "string" ? obj.components : "",
     };
   } finally {
-    try {
-      rmSync(workdir, { recursive: true, force: true });
-    } catch {
-      // ignore
-    }
+    run.cleanup();
   }
 }

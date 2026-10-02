@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { optionalAuthMiddleware } from "./auth/middleware";
 import { fallbackDesign, inferTitle } from "./templates";
 import { systemPromptBlock } from "./systems";
 import type { DesignSystem, Fidelity, ProjectKind, Tweak } from "./types";
@@ -153,19 +154,26 @@ async function generateViaChatCompletions(
 }
 
 export const generateDesign = createServerFn({ method: "POST" })
+  // Optional auth: resolves the signed-in user (to use THEIR xAI credential)
+  // without rejecting anonymous callers. Enforcing auth here is a follow-up.
+  .middleware([optionalAuthMiddleware])
   .validator((input: GenerateInput) => input)
-  .handler(async ({ data }): Promise<GenerateResult | GenerateError> => {
+  .handler(async ({ data, context }): Promise<GenerateResult | GenerateError> => {
     // Dynamic import keeps node:child_process out of the client graph
     // (same pattern as projects.ts → db).
     const {
       allowApiFallback,
+      DESIGN_RUN_TIMEOUT_MS,
+      GrokBuildError,
       isGrokBuildDisabled,
       resolveGrokBin,
       runGrokBuildDesign,
       shouldUseGrokBuild,
     } = await import("./grok-build");
+    const { CREDENTIAL_MESSAGES, recordInferenceError, resolveGenerationCredential } = await import(
+      "./xai/service.server"
+    );
 
-    const apiKey = process.env.XAI_API_KEY?.trim();
     const model = data.model || "grok-4.6";
     const local = fallbackDesign({
       prompt: data.prompt,
@@ -175,12 +183,22 @@ export const generateDesign = createServerFn({ method: "POST" })
       system: data.system,
     });
 
-    // No key → local templates (unchanged).
-    if (!apiKey) {
+    // The user's xAI token must outlive the run (+ the 5-minute refresh skew).
+    const credential = await resolveGenerationCredential(
+      context.userId ?? null,
+      DESIGN_RUN_TIMEOUT_MS + 5 * 60_000,
+    );
+    if (credential.kind === "none" && credential.reason !== "no_key") {
+      return { ok: false, error: CREDENTIAL_MESSAGES[credential.reason] };
+    }
+    const apiKey = credential.kind === "server_key" ? credential.apiKey : undefined;
+
+    // No credential at all → local templates (unchanged).
+    if (!apiKey && credential.kind !== "user_oauth") {
       return { ...local, ok: true, usedModel: "local", fallback: true };
     }
 
-    const context = buildUserContext(data);
+    const context_ = buildUserContext(data);
     const historyBlock =
       data.history.length > 0
         ? `Recent conversation:\n${data.history
@@ -188,7 +206,7 @@ export const generateDesign = createServerFn({ method: "POST" })
             .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
             .join("\n\n")}`
         : "";
-    const buildPrompt = [context, historyBlock, `USER REQUEST:\n${data.prompt}`]
+    const buildPrompt = [context_, historyBlock, `USER REQUEST:\n${data.prompt}`]
       .filter(Boolean)
       .join("\n\n");
 
@@ -200,6 +218,10 @@ export const generateDesign = createServerFn({ method: "POST" })
           systemPrompt: SYSTEM,
           model,
           currentHtml: data.currentHtml,
+          credential:
+            credential.kind === "user_oauth"
+              ? { kind: "user_oauth", accessToken: credential.accessToken, expiresAt: credential.expiresAt }
+              : { kind: "server_key", apiKey: apiKey as string },
         });
         // Safety nets if structured fields need repair from raw text
         const fromRaw = built.rawText ? extractJson(built.rawText) : null;
@@ -225,11 +247,25 @@ export const generateDesign = createServerFn({ method: "POST" })
         };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Grok Build failed";
-        if (allowApiFallback()) {
+        if (credential.kind === "user_oauth") {
+          if (e instanceof GrokBuildError && (e.httpStatus === 401 || e.httpStatus === 403)) {
+            await recordInferenceError(credential.userId, `inference_${e.httpStatus}`);
+          }
+          // Never retry a user's request on the server key or a raw API call.
+          return { ok: false, error: msg };
+        }
+        if (allowApiFallback() && apiKey) {
           return generateViaChatCompletions(data, apiKey, local);
         }
         return { ok: false, error: msg };
       }
+    }
+
+    if (credential.kind === "user_oauth") {
+      return {
+        ok: false,
+        error: "Grok Build CLI not found on the server — your xAI account can only be used through Grok Build.",
+      };
     }
 
     // Build preferred but binary missing — no silent API unless allowed.
@@ -242,5 +278,6 @@ export const generateDesign = createServerFn({ method: "POST" })
     }
 
     // Legacy chat completions: Build disabled, or explicit API fallback path.
+    if (!apiKey) return { ...local, ok: true, usedModel: "local", fallback: true };
     return generateViaChatCompletions(data, apiKey, local);
   });

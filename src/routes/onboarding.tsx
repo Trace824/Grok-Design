@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { Wordmark } from "@/components/logo";
+import { optionalAuthMiddleware } from "@/lib/auth/middleware";
 import { emptySystem } from "@/lib/systems";
 import { useDesignStore } from "@/lib/store";
 import type { DesignSystem } from "@/lib/types";
@@ -16,15 +17,23 @@ export const Route = createFileRoute("/onboarding")({
 });
 
 const extractSystem = createServerFn({ method: "POST" })
+  .middleware([optionalAuthMiddleware])
   .validator((input: { notes: string; name: string }) => input)
-  .handler(async ({ data }) => {
-    const apiKey = process.env.XAI_API_KEY?.trim();
+  .handler(async ({ data, context }) => {
     const fallback: DesignSystem = {
       ...emptySystem(data.name || "Custom system"),
       sourceNotes: data.notes,
       voice: data.notes.slice(0, 180),
     };
-    if (!apiKey) return fallback;
+
+    const { EXTRACT_RUN_TIMEOUT_MS } = await import("@/lib/grok-build");
+    const { resolveGenerationCredential } = await import("@/lib/xai/service.server");
+    const credential = await resolveGenerationCredential(
+      context.userId ?? null,
+      EXTRACT_RUN_TIMEOUT_MS + 5 * 60_000,
+    );
+    const apiKey = credential.kind === "server_key" ? credential.apiKey : undefined;
+    if (!apiKey && credential.kind !== "user_oauth") return fallback;
 
     const {
       allowApiFallback,
@@ -33,6 +42,8 @@ const extractSystem = createServerFn({ method: "POST" })
     } = await import("@/lib/grok-build");
 
     async function viaChatCompletions(): Promise<DesignSystem> {
+      // Raw api.x.ai calls use the server key only (never a user's OAuth token).
+      if (!apiKey) return fallback;
       const res = await fetch("https://api.x.ai/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -77,6 +88,10 @@ const extractSystem = createServerFn({ method: "POST" })
           notes: data.notes,
           name: data.name,
           model: "grok-4.5",
+          credential:
+            credential.kind === "user_oauth"
+              ? { kind: "user_oauth", accessToken: credential.accessToken, expiresAt: credential.expiresAt }
+              : { kind: "server_key", apiKey: apiKey as string },
         });
         return {
           ...fallback,
@@ -89,7 +104,7 @@ const extractSystem = createServerFn({ method: "POST" })
           components: parsed.components || fallback.components,
         };
       } catch {
-        if (allowApiFallback()) {
+        if (allowApiFallback() && apiKey) {
           try {
             return await viaChatCompletions();
           } catch {
