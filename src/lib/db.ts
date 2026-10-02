@@ -44,6 +44,7 @@ export interface Sql {
  */
 const globalRef = globalThis as typeof globalThis & {
   __pgSqlPromise__?: Promise<Sql>;
+  __pgPool__?: import("pg").Pool;
   __pgliteInstance__?: Promise<import("@electric-sql/pglite").PGlite>;
   __pgliteMigrateChain__?: Promise<void>;
 };
@@ -92,6 +93,7 @@ function createNeonSql(): Promise<Sql> {
     types.setTypeParser(OID_DATE, identity);
     types.setTypeParser(OID_INTERVAL, identity);
     const pool = new Pool({ connectionString: databaseUrl });
+    globalRef.__pgPool__ = pool;
     return toSql(async <T>(text: string, params: unknown[]) => {
       const res = await pool.query(text, params);
       return res.rows as T[];
@@ -207,6 +209,57 @@ export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite
   const pg = await globalRef.__pgliteInstance__;
   if (!pg) throw new Error("PGLite instance failed to initialize");
   return pg;
+}
+
+/**
+ * Run `fn` inside ONE database transaction (server-only) and return its result.
+ * Commits when `fn` resolves, rolls back when it throws.
+ *
+ * Use this when statements must share a connection — e.g. `SELECT … FOR UPDATE`
+ * row locks (the xAI token refresh single-flight). The plain `getSql()` client
+ * may run each statement on a different pooled connection, so a lock taken with
+ * it would be released immediately.
+ *
+ * - **Neon** (`pg` Pool): checks out a dedicated client, `BEGIN … COMMIT`.
+ * - **PGLite**: `pg.transaction()` (PGLite serializes transactions on its single
+ *   connection, so concurrent callers queue rather than interleave).
+ */
+export async function withTransaction<T>(fn: (tx: Sql) => Promise<T>): Promise<T> {
+  await getSql(); // init pool / PGLite + migrations
+  if (dbSource === "neon") {
+    const pool = globalRef.__pgPool__;
+    if (!pool) throw new Error("Postgres pool not initialized");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const tx = toSql(async <R>(text: string, params: unknown[]) => {
+        const res = await client.query(text, params);
+        return res.rows as R[];
+      });
+      const out = await fn(tx);
+      await client.query("COMMIT");
+      return out;
+    } catch (err) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // connection died — keep the original error
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+  const pg = await globalRef.__pgliteInstance__;
+  if (!pg) throw new Error("PGLite instance failed to initialize");
+  return pg.transaction(async (t) =>
+    fn(
+      toSql(async <R>(text: string, params: unknown[]) => {
+        const res = await t.query<R>(text, params);
+        return res.rows;
+      }),
+    ),
+  );
 }
 
 /**
