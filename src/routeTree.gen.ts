@@ -16,6 +16,8 @@ import { Route as PresentIdRouteImport } from './routes/present.$id'
 import { Route as ProjectIdRouteImport } from './routes/project.$id'
 import { Route as ShareIdRouteImport } from './routes/share.$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiXaiOauthCallbackRouteImport } from './routes/api/xai/oauth/callback'
+import { Route as ApiXaiOauthStartRouteImport } from './routes/api/xai/oauth/start'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,6 +54,16 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiXaiOauthCallbackRoute = ApiXaiOauthCallbackRouteImport.update({
+  id: '/api/xai/oauth/callback',
+  path: '/api/xai/oauth/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiXaiOauthStartRoute = ApiXaiOauthStartRouteImport.update({
+  id: '/api/xai/oauth/start',
+  path: '/api/xai/oauth/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -61,6 +73,8 @@ export interface FileRoutesByFullPath {
   '/project/$id': typeof ProjectIdRoute
   '/share/$id': typeof ShareIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/xai/oauth/callback': typeof ApiXaiOauthCallbackRoute
+  '/api/xai/oauth/start': typeof ApiXaiOauthStartRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -70,6 +84,8 @@ export interface FileRoutesByTo {
   '/project/$id': typeof ProjectIdRoute
   '/share/$id': typeof ShareIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/xai/oauth/callback': typeof ApiXaiOauthCallbackRoute
+  '/api/xai/oauth/start': typeof ApiXaiOauthStartRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -80,6 +96,8 @@ export interface FileRoutesById {
   '/project/$id': typeof ProjectIdRoute
   '/share/$id': typeof ShareIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/xai/oauth/callback': typeof ApiXaiOauthCallbackRoute
+  '/api/xai/oauth/start': typeof ApiXaiOauthStartRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +109,8 @@ export interface FileRouteTypes {
     | '/project/$id'
     | '/share/$id'
     | '/api/auth/$'
+    | '/api/xai/oauth/callback'
+    | '/api/xai/oauth/start'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -100,6 +120,8 @@ export interface FileRouteTypes {
     | '/project/$id'
     | '/share/$id'
     | '/api/auth/$'
+    | '/api/xai/oauth/callback'
+    | '/api/xai/oauth/start'
   id:
     | '__root__'
     | '/'
@@ -109,6 +131,8 @@ export interface FileRouteTypes {
     | '/project/$id'
     | '/share/$id'
     | '/api/auth/$'
+    | '/api/xai/oauth/callback'
+    | '/api/xai/oauth/start'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -119,6 +143,8 @@ export interface RootRouteChildren {
   ProjectIdRoute: typeof ProjectIdRoute
   ShareIdRoute: typeof ShareIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiXaiOauthCallbackRoute: typeof ApiXaiOauthCallbackRoute
+  ApiXaiOauthStartRoute: typeof ApiXaiOauthStartRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -172,6 +198,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/xai/oauth/callback': {
+      id: '/api/xai/oauth/callback'
+      path: '/api/xai/oauth/callback'
+      fullPath: '/api/xai/oauth/callback'
+      preLoaderRoute: typeof ApiXaiOauthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/xai/oauth/start': {
+      id: '/api/xai/oauth/start'
+      path: '/api/xai/oauth/start'
+      fullPath: '/api/xai/oauth/start'
+      preLoaderRoute: typeof ApiXaiOauthStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -183,6 +223,8 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectIdRoute: ProjectIdRoute,
   ShareIdRoute: ShareIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiXaiOauthCallbackRoute: ApiXaiOauthCallbackRoute,
+  ApiXaiOauthStartRoute: ApiXaiOauthStartRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
