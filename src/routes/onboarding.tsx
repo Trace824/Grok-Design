@@ -18,14 +18,21 @@ export const Route = createFileRoute("/onboarding")({
 const extractSystem = createServerFn({ method: "POST" })
   .validator((input: { notes: string; name: string }) => input)
   .handler(async ({ data }) => {
-    const apiKey = process.env.XAI_API_KEY;
+    const apiKey = process.env.XAI_API_KEY?.trim();
     const fallback: DesignSystem = {
       ...emptySystem(data.name || "Custom system"),
       sourceNotes: data.notes,
       voice: data.notes.slice(0, 180),
     };
     if (!apiKey) return fallback;
-    try {
+
+    const {
+      allowApiFallback,
+      runGrokBuildExtractSystem,
+      shouldUseGrokBuild,
+    } = await import("@/lib/grok-build");
+
+    async function viaChatCompletions(): Promise<DesignSystem> {
       const res = await fetch("https://api.x.ai/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -62,6 +69,39 @@ const extractSystem = createServerFn({ method: "POST" })
         voice: parsed.voice || fallback.voice,
         components: parsed.components || fallback.components,
       };
+    }
+
+    if (shouldUseGrokBuild()) {
+      try {
+        const parsed = await runGrokBuildExtractSystem({
+          notes: data.notes,
+          name: data.name,
+          model: "grok-4.5",
+        });
+        return {
+          ...fallback,
+          name: parsed.name || fallback.name,
+          colors: parsed.colors?.length ? parsed.colors : fallback.colors,
+          fonts: parsed.fonts?.length ? parsed.fonts : fallback.fonts,
+          radii: parsed.radii || fallback.radii,
+          spacing: parsed.spacing || fallback.spacing,
+          voice: parsed.voice || fallback.voice,
+          components: parsed.components || fallback.components,
+        };
+      } catch {
+        if (allowApiFallback()) {
+          try {
+            return await viaChatCompletions();
+          } catch {
+            return fallback;
+          }
+        }
+        return fallback;
+      }
+    }
+
+    try {
+      return await viaChatCompletions();
     } catch {
       return fallback;
     }
