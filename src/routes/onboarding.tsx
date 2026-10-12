@@ -26,7 +26,35 @@ const extractSystem = createServerFn({ method: "POST" })
       voice: data.notes.slice(0, 180),
     };
 
-    const { EXTRACT_RUN_TIMEOUT_MS } = await import("@/lib/grok-build");
+    const { EXTRACT_RUN_TIMEOUT_MS, runGrokBuildExtractSystem, shouldUseGrokBuild } = await import(
+      "@/lib/grok-build"
+    );
+    const { profilePaths, readProfileStatus } = await import("@/lib/grok-run/cli-login");
+    const cliProfile = readProfileStatus();
+    if (cliProfile.signedIn && shouldUseGrokBuild()) {
+      const paths = profilePaths();
+      try {
+        const parsed = await runGrokBuildExtractSystem({
+          notes: data.notes,
+          name: data.name,
+          model: "grok-4.7",
+          credential: { kind: "cli_profile", home: paths.home, grokHome: paths.grokHome },
+        });
+        return {
+          ...fallback,
+          name: parsed.name || fallback.name,
+          colors: parsed.colors?.length ? parsed.colors : fallback.colors,
+          fonts: parsed.fonts?.length ? parsed.fonts : fallback.fonts,
+          radii: parsed.radii || fallback.radii,
+          spacing: parsed.spacing || fallback.spacing,
+          voice: parsed.voice || fallback.voice,
+          components: parsed.components || fallback.components,
+        };
+      } catch {
+        return fallback;
+      }
+    }
+
     const { resolveGenerationCredential } = await import("@/lib/xai/service.server");
     const credential = await resolveGenerationCredential(
       context.userId ?? null,
@@ -35,11 +63,7 @@ const extractSystem = createServerFn({ method: "POST" })
     const apiKey = credential.kind === "server_key" ? credential.apiKey : undefined;
     if (!apiKey && credential.kind !== "user_oauth") return fallback;
 
-    const {
-      allowApiFallback,
-      runGrokBuildExtractSystem,
-      shouldUseGrokBuild,
-    } = await import("@/lib/grok-build");
+    const { allowApiFallback } = await import("@/lib/grok-build");
 
     async function viaChatCompletions(): Promise<DesignSystem> {
       // Raw api.x.ai calls use the server key only (never a user's OAuth token).
@@ -51,7 +75,7 @@ const extractSystem = createServerFn({ method: "POST" })
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "grok-4.5",
+          model: "grok-4.7",
           max_tokens: 1200,
           messages: [
             {
@@ -87,7 +111,7 @@ const extractSystem = createServerFn({ method: "POST" })
         const parsed = await runGrokBuildExtractSystem({
           notes: data.notes,
           name: data.name,
-          model: "grok-4.5",
+          model: "grok-4.7",
           credential:
             credential.kind === "user_oauth"
               ? { kind: "user_oauth", accessToken: credential.accessToken, expiresAt: credential.expiresAt }

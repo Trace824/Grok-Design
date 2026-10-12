@@ -5,6 +5,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { accessSync, constants, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { chooseGrokModel, parseGrokModelsOutput, type GrokModelList } from "./grok-run/models.ts";
 import {
   createRunHome,
   killGroup,
@@ -240,6 +241,24 @@ type SpawnResult = {
   code: number | null;
 };
 
+/** Ask this CLI, in this run's env, which model ids it will accept. */
+function listGrokModels(bin: string, env: NodeJS.ProcessEnv, cwd: string): GrokModelList | null {
+  try {
+    const stdout = execFileSync(bin, ["models"], {
+      cwd,
+      env,
+      encoding: "utf8",
+      timeout: 20_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const listing = parseGrokModelsOutput(stdout);
+    if (!listing.defaultId && listing.ids.length === 0) return null;
+    return listing;
+  } catch {
+    return null;
+  }
+}
+
 function spawnGrok(
   args: string[],
   opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number },
@@ -374,11 +393,11 @@ export async function runGrokBuildDesign(
   if (!bin) {
     throw new Error("Grok Build CLI binary not found. Install grok or set GROK_BUILD_BIN.");
   }
-  const model = opts.model?.trim() || undefined;
   const maxTurns = opts.maxTurns ?? 6;
   const timeoutMs = opts.timeoutMs ?? DESIGN_RUN_TIMEOUT_MS;
   const run = await prepareRun(bin, opts.credential);
   const workdir = run.cwd;
+  const model = chooseGrokModel(opts.model, listGrokModels(bin, run.env, workdir));
 
   try {
     writeFileSync(join(workdir, "AGENTS.md"), buildAgentsMd(opts.systemPrompt), "utf8");
@@ -548,7 +567,8 @@ ${systemRules}
       "--disallowed-tools",
       "Agent,web_search,web_fetch,run_terminal_cmd",
     ];
-    if (opts.model) args.push("-m", opts.model);
+    const model = chooseGrokModel(opts.model, listGrokModels(bin, run.env, workdir));
+    if (model) args.push("-m", model);
 
     const { stdout, stderr, code } = await spawnGrok(args, {
       cwd: workdir,

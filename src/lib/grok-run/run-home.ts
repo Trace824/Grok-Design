@@ -29,7 +29,8 @@ import {
 
 export type RunCredential =
   | { kind: "user_oauth"; accessToken: string; expiresAt: Date }
-  | { kind: "server_key"; apiKey: string };
+  | { kind: "server_key"; apiKey: string }
+  | { kind: "cli_profile"; home: string; grokHome: string };
 
 export type RunHome = {
   root: string;
@@ -69,6 +70,49 @@ function shQuote(p: string): string {
 }
 
 export function createRunHome(credential: RunCredential, source: Record<string, string | undefined> = process.env): RunHome {
+  if (credential.kind === "cli_profile") {
+    // The OAuth session lives in the persistent profile. Only the workdir is disposable.
+    const cwdRoot = mkdtempSync(join(tmpdir(), "gd-cwd-"));
+    chmodSync(cwdRoot, 0o700);
+    const cwd = join(cwdRoot, "cwd");
+    mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    mkdirSync(credential.home, { recursive: true, mode: 0o700 });
+    mkdirSync(credential.grokHome, { recursive: true, mode: 0o700 });
+    const cleanup = () => {
+      try {
+        rmSync(cwdRoot, { recursive: true, force: true, maxRetries: 2 });
+      } catch {
+        // best effort
+      }
+    };
+    try {
+      const configPath = join(credential.grokHome, "config.toml");
+      if (!existsSync(configPath)) {
+        writeFileSync(configPath, CONFIG_TOML, { mode: 0o600 });
+      }
+      const childCred: GrokChildCredential = { kind: "cli_profile" };
+      const env = buildGrokChildEnv({
+        source,
+        paths: { home: credential.home, grokHome: credential.grokHome },
+        credential: childCred,
+        extraAllow: parseExtraAllow(source.GROK_BUILD_EXTRA_ENV),
+      });
+      assertNoSecretLeak(env, source, childCred);
+      return {
+        root: cwdRoot,
+        home: credential.home,
+        grokHome: credential.grokHome,
+        cwd,
+        env,
+        credentialKind: "cli_profile",
+        cleanup,
+      };
+    } catch (err) {
+      cleanup();
+      throw err;
+    }
+  }
+
   const root = mkdtempSync(join(tmpdir(), "gd-run-"));
   chmodSync(root, 0o700);
   const home = join(root, "home");

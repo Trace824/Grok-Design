@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { BookOpen, Folder, Plus, Search } from "lucide-react";
 import { SignedIn, SignedOut, UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { authEnabled, signIn, GROK_PROVIDERS } from "@/lib/auth/client";
+import { CliAccount } from "@/components/account-menu";
 import { Wordmark } from "@/components/logo";
 import { XaiConnectCard } from "@/components/xai-connect-card";
 import { EXAMPLES } from "@/lib/examples";
@@ -81,7 +81,7 @@ function Home() {
           versions: [],
           systemId: s.systems.find((x) => x.isDefault)?.id ?? null,
           share: "view",
-          model: "grok-4.5",
+          model: "grok-4.7",
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
@@ -234,8 +234,8 @@ function Home() {
           </SignedIn>
         </div>
 
-        <div className="mt-auto flex items-center gap-2 px-6 py-5 text-[13px] text-mute">
-          <AuthChip pending={isPending} signedIn={Boolean(user)} name={user?.displayName} />
+        <div className="mt-auto flex min-w-0 flex-wrap items-center gap-2 px-6 py-5 text-[13px] text-mute">
+          <AuthChip pending={isPending} signedIn={Boolean(user)} />
           <span className="text-line-2">·</span>
           <span>xAI</span>
           <span className="text-line-2">·</span>
@@ -445,15 +445,7 @@ function relTime(ts: number) {
   return "Today";
 }
 
-function AuthChip({
-  pending,
-  signedIn,
-  name,
-}: {
-  pending: boolean;
-  signedIn: boolean;
-  name?: string | null;
-}) {
+function AuthChip({ pending, signedIn }: { pending: boolean; signedIn: boolean }) {
   if (pending) return <div className="h-6 w-24 animate-pulse rounded-full bg-paper-2" />;
   if (signedIn) {
     return (
@@ -466,17 +458,7 @@ function AuthChip({
   }
   return (
     <SignedOut>
-      {authEnabled ? (
-        <button
-          type="button"
-          className="hover:text-ink"
-          onClick={() => signIn(GROK_PROVIDERS[0].providerId, { callbackURL: "/" })}
-        >
-          {name ?? "Sign in"}
-        </button>
-      ) : (
-        <span>Local</span>
-      )}
+      <CliAccount variant="footer" />
     </SignedOut>
   );
 }

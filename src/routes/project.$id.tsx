@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { generateDesign } from "@/lib/generate";
+import { CliAccount } from "@/components/account-menu";
 import { useDesignStore } from "@/lib/store";
 import { uid } from "@/lib/id";
 import { cn } from "@/lib/cn";
@@ -58,6 +59,7 @@ export const Route = createFileRoute("/project/$id")({
 });
 
 const MODELS: { id: ModelId; label: string }[] = [
+  { id: "grok-4.7", label: "Grok 4.7" },
   { id: "grok-4.6", label: "Grok 4.6" },
   { id: "grok-4.5", label: "Grok 4.5" },
   { id: "grok-4", label: "Grok 4" },
@@ -385,6 +387,9 @@ function Workspace() {
             >
               <Presentation className="size-3.5" /> Present
             </button>
+          </div>
+          <div className="relative hidden sm:block">
+            <CliAccount variant="compact" />
           </div>
           <button
             type="button"
