@@ -62,7 +62,9 @@ const DENY_NAME = /(SECRET|PASSWORD|PASSWD|TOKEN|PRIVATE|CREDENTIAL|_KEY$|_KEYS$
 
 export type GrokChildCredential =
   | { kind: "user_oauth"; authProviderCommand: string }
-  | { kind: "server_key"; apiKey: string };
+  | { kind: "server_key"; apiKey: string }
+  /** Persistent `grok login` profile. The CLI reads its own auth.json; no token is injected. */
+  | { kind: "cli_profile" };
 
 export type RunPaths = { home: string; grokHome: string };
 
@@ -103,6 +105,9 @@ export function buildGrokChildEnv(opts: {
     env.GROK_AUTH_PROVIDER_LABEL = "Grok Design";
     // Fail closed: a user run must never silently fall back to an API key.
     env.GROK_DISABLE_API_KEY_AUTH = "1";
+  } else if (opts.credential.kind === "cli_profile") {
+    // The persistent profile's auth.json is the credential. No API key beside it.
+    env.GROK_DISABLE_API_KEY_AUTH = "1";
   } else {
     env.XAI_API_KEY = opts.credential.apiKey;
   }
@@ -119,7 +124,11 @@ export function assertNoSecretLeak(
   credential: GrokChildCredential,
 ): void {
   const intentional = new Set<string>(
-    credential.kind === "server_key" ? ["XAI_API_KEY"] : ["GROK_AUTH_PROVIDER_COMMAND", "GROK_AUTH_PROVIDER_LABEL"],
+    credential.kind === "server_key"
+      ? ["XAI_API_KEY"]
+      : credential.kind === "user_oauth"
+        ? ["GROK_AUTH_PROVIDER_COMMAND", "GROK_AUTH_PROVIDER_LABEL"]
+        : [],
   );
   for (const name of Object.keys(child)) {
     if (DENY_NAME.test(name) && !intentional.has(name) && !(name in GROK_ISOLATION_ENV) && name !== "GROK_DISABLE_API_KEY_AUTH") {

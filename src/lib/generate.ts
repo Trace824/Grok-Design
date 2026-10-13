@@ -99,7 +99,7 @@ async function generateViaChatCompletions(
   apiKey: string,
   local: ReturnType<typeof fallbackDesign>,
 ): Promise<GenerateResult | GenerateError> {
-  const model = data.model || "grok-4.6";
+  const model = data.model || "grok-4.7";
   const context = buildUserContext(data);
   const messages = [
     { role: "system" as const, content: SYSTEM },
@@ -174,7 +174,7 @@ export const generateDesign = createServerFn({ method: "POST" })
       "./xai/service.server"
     );
 
-    const model = data.model || "grok-4.6";
+    const model = data.model || "grok-4.7";
     const local = fallbackDesign({
       prompt: data.prompt,
       kind: data.kind,
@@ -182,6 +182,55 @@ export const generateDesign = createServerFn({ method: "POST" })
       speakerNotes: data.speakerNotes,
       system: data.system,
     });
+
+    const { profilePaths, readProfileStatus } = await import("./grok-run/cli-login");
+    const cliProfile = readProfileStatus();
+    if (cliProfile.signedIn) {
+      if (!shouldUseGrokBuild()) {
+        return { ok: false, error: "Grok Build CLI not found on the server." };
+      }
+      const paths = profilePaths();
+      const context_ = buildUserContext(data);
+      const historyBlock =
+        data.history.length > 0
+          ? `Recent conversation:\n${data.history
+              .slice(-8)
+              .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+              .join("\n\n")}`
+          : "";
+      const buildPrompt = [context_, historyBlock, `USER REQUEST:\n${data.prompt}`].filter(Boolean).join("\n\n");
+      try {
+        const built = await runGrokBuildDesign({
+          prompt: buildPrompt,
+          systemPrompt: SYSTEM,
+          model,
+          currentHtml: data.currentHtml,
+          credential: { kind: "cli_profile", home: paths.home, grokHome: paths.grokHome },
+        });
+        const fromRaw = built.rawText ? extractJson(built.rawText) : null;
+        const html =
+          built.html && /<html/i.test(built.html)
+            ? built.html
+            : (fromRaw?.html && /<html/i.test(fromRaw.html) ? fromRaw.html : extractHtml(built.rawText || "")) ||
+              local.html;
+        const tweaks =
+          Array.isArray(built.tweaks) && built.tweaks.length
+            ? built.tweaks
+            : Array.isArray(fromRaw?.tweaks) && fromRaw.tweaks.length
+              ? (fromRaw.tweaks as Tweak[])
+              : local.tweaks;
+        return {
+          ok: true,
+          reply: built.reply || fromRaw?.reply || "Updated the canvas.",
+          title: built.title || fromRaw?.title || inferTitle(data.prompt),
+          html,
+          tweaks,
+          usedModel: built.usedModel,
+        };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : "Grok Build failed" };
+      }
+    }
 
     // The user's xAI token must outlive the run (+ the 5-minute refresh skew).
     const credential = await resolveGenerationCredential(

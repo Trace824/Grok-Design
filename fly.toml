@@ -9,6 +9,12 @@ primary_region = 'ord'
 [env]
   PORT = '8080'
   HOST = '0.0.0.0'
+  # Persistent `grok login` profile. The volume below survives machine sleep.
+  GROK_PROFILE_ROOT = '/data/grok-profile'
+
+[[mounts]]
+  source = 'grok_profile'
+  destination = '/data/grok-profile'
 
 [http_service]
   internal_port = 8080
